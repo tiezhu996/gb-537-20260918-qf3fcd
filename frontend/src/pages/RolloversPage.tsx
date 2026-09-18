@@ -1,5 +1,5 @@
-import { AddRounded, ArrowForwardRounded, AutorenewRounded, FactCheckRounded, KeyboardArrowRightRounded, PlayArrowRounded, RefreshRounded, ReplayRounded, RouteRounded, ScienceRounded } from '@mui/icons-material'
-import { Alert, Box, Button, Checkbox, FormControl, IconButton, InputLabel, ListItemText, MenuItem, Select, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material'
+import { AddRounded, ArrowForwardRounded, AutorenewRounded, FactCheckRounded, GavelRounded, KeyboardArrowRightRounded, PlayArrowRounded, RefreshRounded, ReplayRounded, RouteRounded, ScienceRounded } from '@mui/icons-material'
+import { Alert, AlertTitle, Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControl, IconButton, InputLabel, ListItemText, MenuItem, Select, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip, Typography } from '@mui/material'
 import { FormEvent, useEffect, useState } from 'react'
 import { errorMessage } from '../api/client'
 import { DependencyGraph } from '../components/common/DependencyGraph'
@@ -16,7 +16,7 @@ import { useCertificateChainStore } from '../stores/certificate-chain'
 import { useDependentServiceStore } from '../stores/dependent-service'
 import { useRolloverScenarioStore } from '../stores/rollover-scenario'
 import { useTrustAnchorStore } from '../stores/trust-anchor'
-import type { CreateRolloverScenarioInput, RolloverScenario } from '../types/rollover-scenario'
+import type { CreateRolloverScenarioInput, ReleaseGateStatus, RolloverScenario } from '../types/rollover-scenario'
 import type { ScenarioState } from '../types/enums/scenario-state'
 import { formatDateTime, toLocalInput } from '../utils/date'
 
@@ -33,6 +33,9 @@ const transitionCopy: Partial<Record<ScenarioState, { to: ScenarioState; label: 
   executing: { to: 'verified', label: '独立复核通过' },
 }
 
+const gateSeverity: Record<ReleaseGateStatus, 'info' | 'success' | 'warning' | 'error'> = { not_simulated: 'info', clear: 'success', acceptance_required: 'warning', blocked: 'error' }
+const gateCopy: Record<ReleaseGateStatus, string> = { not_simulated: '待推演', clear: '直接通过', acceptance_required: '需风险接受', blocked: '放行受阻' }
+
 export function RolloversPage() {
   const { items, total, status, error, active, fetchScenarios, createScenario, transition, replay, select } = useRolloverScenarioStore()
   const { items: anchors, fetchAnchors } = useTrustAnchorStore()
@@ -42,6 +45,8 @@ export function RolloversPage() {
   const simulation = useRolloverSimulation()
   const [createOpen, setCreateOpen] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
+  const [acceptOpen, setAcceptOpen] = useState(false)
+  const [acceptanceNote, setAcceptanceNote] = useState('')
   const [form, setForm] = useState<CreateRolloverScenarioInput>(defaultScenario)
   const [feedback, setFeedback] = useState('')
   const [success, setSuccess] = useState('')
@@ -75,6 +80,19 @@ export function RolloversPage() {
     try { const updated = await transition(active.id, to); setSuccess(`场景状态已更新为 ${updated.scenario_state}。`) }
     catch (cause) { setFeedback(errorMessage(cause)) } finally { setBusy(false) }
   }
+  const gate = active?.release_gate
+  const advance = (to: ScenarioState) => {
+    if (to === 'ready' && gate?.status === 'acceptance_required') { setAcceptanceNote(''); setAcceptOpen(true); return }
+    void transitionActive(to)
+  }
+  const confirmAcceptance = async () => {
+    if (!active) return; setBusy(true); setFeedback(''); setSuccess('')
+    try {
+      const updated = await transition(active.id, 'ready', '', acceptanceNote.trim())
+      setAcceptOpen(false); setAcceptanceNote('')
+      setSuccess(`场景状态已更新为 ${updated.scenario_state}，风险接受说明已随审计保留。`)
+    } catch (cause) { setFeedback(errorMessage(cause)) } finally { setBusy(false) }
+  }
   const replayActive = async () => {
     if (!active) return; setBusy(true); setFeedback(''); setSuccess('')
     try { const updated = await replay(active.id); setSuccess(updated.replay_verified ? '重放结果与冻结历史证据一致。' : '重放结果不一致。') }
@@ -84,6 +102,7 @@ export function RolloversPage() {
   const next = active ? transitionCopy[active.scenario_state] : undefined
   const canAdvance = next && ((next.to === 'verified' && can('scenario.verify')) || (next.to !== 'verified' && can('scenario.write')))
   const reviewerConflict = active?.scenario_state === 'executing' && active.created_by === user?.user_id
+  const readyBlocked = next?.to === 'ready' && gate?.status === 'blocked'
 
   return <Box className="page-shell rollover-page">
     <PageHeader eyebrow="ROLLOVER REHEARSAL / FROZEN SNAPSHOTS" title="轮换推演" summary="在旧根、新根和交叠窗口的关键时间点重放服务信任路径。executing 仅记录演练步骤，不执行生产变更。" actions={<><Tooltip title="刷新"><IconButton onClick={() => fetchScenarios()} aria-label="刷新轮换推演"><RefreshRounded /></IconButton></Tooltip>{can('scenario.write') && <Button variant="contained" startIcon={<AddRounded />} onClick={openCreate}>新建冻结场景</Button>}</>} />
@@ -101,9 +120,16 @@ export function RolloversPage() {
           <Box className="anchor-transition"><Box><span>旧信任锚</span><strong>{active.old_anchor?.anchor_code ?? `#${active.old_anchor_id}`}</strong><small>{active.old_anchor?.fingerprint_sha256 && <Fingerprint value={active.old_anchor.fingerprint_sha256} compact />}</small></Box><Box className="transition-axis"><ArrowForwardRounded /><span>{formatDateTime(active.overlap_start)}<br />至 {formatDateTime(active.overlap_end)}</span></Box><Box><span>新信任锚</span><strong>{active.new_anchor?.anchor_code ?? `#${active.new_anchor_id}`}</strong><small>{active.new_anchor?.fingerprint_sha256 && <Fingerprint value={active.new_anchor.fingerprint_sha256} compact />}</small></Box></Box>
           <Box className="scenario-evidence-grid"><Box><Typography className="eyebrow">SIMULATION TIME</Typography><strong>{formatDateTime(active.simulation_time)}</strong><span>耗时 {active.duration_ms} ms</span></Box><Box><Typography className="eyebrow">INPUT HASH</Typography><Fingerprint value={active.input_hash} compact /></Box><Box className={active.broken_paths_json.length ? 'is-risk' : 'is-pass'}><Typography className="eyebrow">BROKEN PATHS</Typography><strong>{active.broken_paths_json.length}</strong><span>{active.affected_services_json.length} 个受影响服务</span></Box></Box>
           <Box className="simulation-explanation"><ScienceRounded /><Typography>{active.explanation}</Typography></Box>
+          {gate && <Alert className="release-gate" severity={gateSeverity[gate.status]} icon={<GavelRounded />}>
+            <AlertTitle>放行判定 · {gateCopy[gate.status]}</AlertTitle>
+            <Typography variant="body2">{gate.summary}</Typography>
+            {!!gate.critical_breaks.length && <Box className="gate-breaks"><Typography className="eyebrow">关键服务断裂 · 受阻时刻</Typography>{gate.critical_breaks.map((item, index) => <Typography component="div" variant="body2" key={`critical-${index}`}><strong>{item.service_code}</strong> · {formatDateTime(item.at)} — {item.reason}</Typography>)}</Box>}
+            {!!gate.non_critical_breaks.length && <Box className="gate-breaks"><Typography className="eyebrow">非关键断裂 · 需风险接受</Typography>{gate.non_critical_breaks.map((item, index) => <Typography component="div" variant="body2" key={`non-critical-${index}`}><strong>{item.service_code}</strong> · {formatDateTime(item.at)} — {item.reason}</Typography>)}</Box>}
+            {!!active.risk_acceptance_note && <Typography variant="body2">风险接受：{active.risk_acceptance_note}（{active.risk_accepted_by_name}{active.risk_accepted_at ? ` · ${formatDateTime(active.risk_accepted_at)}` : ''}）</Typography>}
+          </Alert>}
           <Box className="scenario-toolbar">
             {active.scenario_state === 'draft' && can('scenario.run') && <Button variant="contained" startIcon={<PlayArrowRounded />} disabled={simulation.runningId === active.id} onClick={() => runSimulation(active)}>{simulation.runningId === active.id ? '正在推演…' : '运行离线推演'}</Button>}
-            {canAdvance && !reviewerConflict && <Button variant="contained" startIcon={next?.to === 'verified' ? <FactCheckRounded /> : <ArrowForwardRounded />} disabled={busy} onClick={() => next && transitionActive(next.to)}>{next?.label}</Button>}
+            {canAdvance && !reviewerConflict && <Tooltip title={readyBlocked ? gate?.summary ?? '' : ''}><span><Button variant="contained" startIcon={next?.to === 'verified' ? <FactCheckRounded /> : <ArrowForwardRounded />} disabled={busy || readyBlocked} onClick={() => next && advance(next.to)}>{next?.label}</Button></span></Tooltip>}
             {active.scenario_state !== 'draft' && can('scenario.run') && <Button variant="outlined" startIcon={<ReplayRounded />} disabled={busy} onClick={replayActive}>重放一致性</Button>}
             {!!active.path_evidence_json.length && <Button variant="outlined" startIcon={<RouteRounded />} onClick={() => setEvidenceOpen(true)}>逐路径证据</Button>}
             {active.scenario_state === 'executing' && can('scenario.write') && <Button color="error" variant="text" startIcon={<AutorenewRounded />} onClick={() => transitionActive('rollback')}>记录回滚</Button>}
@@ -113,6 +139,18 @@ export function RolloversPage() {
       </section>
     </Box>
     {active && <ValidationEvidenceDrawer open={evidenceOpen} onClose={() => setEvidenceOpen(false)} title={active.name} subtitle={`${active.algorithm_version} · ${active.input_hash.slice(0, 16)}`} pathEvidence={active.path_evidence_json} />}
+    <Dialog open={acceptOpen} onClose={() => !busy && setAcceptOpen(false)} maxWidth="sm" fullWidth>
+      <DialogTitle>填写风险接受说明</DialogTitle>
+      <DialogContent>
+        <Alert severity="warning" sx={{ mb: 2 }}>推演仍存在非关键断裂路径。放行前必须填写风险接受说明，说明将随审计记录保留。</Alert>
+        {!!active?.release_gate.non_critical_breaks.length && <Box className="gate-breaks" sx={{ mb: 2 }}><Typography className="eyebrow">待接受的非关键断裂</Typography>{active.release_gate.non_critical_breaks.map((item, index) => <Typography component="div" variant="body2" key={`accept-${index}`}><strong>{item.service_code}</strong> · {formatDateTime(item.at)} — {item.reason}</Typography>)}</Box>}
+        <TextField autoFocus multiline minRows={3} fullWidth required label="风险接受说明" value={acceptanceNote} onChange={(event) => setAcceptanceNote(event.target.value)} slotProps={{ htmlInput: { maxLength: 1000 } }} />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setAcceptOpen(false)} disabled={busy}>取消</Button>
+        <Button variant="contained" onClick={confirmAcceptance} disabled={busy || !acceptanceNote.trim()}>{busy ? '正在放行…' : '确认放行'}</Button>
+      </DialogActions>
+    </Dialog>
     <FormDrawer open={createOpen} onClose={() => setCreateOpen(false)} eyebrow="FREEZE INPUT SNAPSHOT" title="新建轮换场景">
       <Alert severity="warning">场景创建后会冻结当前锚点、证书链和服务依赖图。推演只提供决策证据，不能替代生产变更评审与双人复核。</Alert>
       <Box component="form" className="drawer-form" onSubmit={submit}>{feedback && <Alert severity="error">{feedback}</Alert>}<TextField label="场景名称" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />

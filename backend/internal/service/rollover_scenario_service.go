@@ -127,7 +127,7 @@ func (s *RolloverScenarioService) Simulate(ctx context.Context, id uint, idempot
 	pathsJSON, _ := encode(result.BrokenPaths)
 	evidenceJSON, _ := encode(result.Evidence)
 	before := scenario
-	updates := map[string]any{"affected_services_json": affectedJSON, "broken_paths_json": pathsJSON, "path_evidence_json": evidenceJSON, "explanation": result.Explanation, "duration_ms": duration, "idempotency_key": idempotencyKey}
+	updates := map[string]any{"affected_services_json": affectedJSON, "broken_paths_json": pathsJSON, "path_evidence_json": evidenceJSON, "explanation": result.Explanation, "duration_ms": duration, "idempotency_key": idempotencyKey, "risk_acceptance_note": "", "risk_accepted_by": nil, "risk_accepted_by_name": "", "risk_accepted_at": nil}
 	err = s.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
 		changed, completeErr := s.scenarios.CompleteSimulation(txCtx, id, updates)
 		if completeErr != nil {
@@ -143,6 +143,10 @@ func (s *RolloverScenarioService) Simulate(ctx context.Context, id uint, idempot
 		scenario.Explanation = result.Explanation
 		scenario.DurationMS = duration
 		scenario.IdempotencyKey = idempotencyKey
+		scenario.RiskAcceptanceNote = ""
+		scenario.RiskAcceptedBy = nil
+		scenario.RiskAcceptedByName = ""
+		scenario.RiskAcceptedAt = nil
 		return recordAudit(txCtx, s.audits, actor, requestID, "rollover_scenario", id, "simulate", before, scenario, scenario.InputHash, scenario.AlgorithmVersion, &scenario.SimulationTime, duration, result.Explanation)
 	})
 	if err != nil {
@@ -200,7 +204,37 @@ func (s *RolloverScenarioService) Transition(ctx context.Context, id uint, reque
 	if to == constants.ScenarioRollback {
 		updates["rollback_record"] = strings.TrimSpace(request.Comment)
 	}
+	acceptanceNote := ""
+	var acceptanceAt time.Time
+	if to == constants.ScenarioReady {
+		var affected []algorithm.AffectedService
+		if decodeErr := json.Unmarshal([]byte(scenario.AffectedServicesJSON), &affected); decodeErr != nil {
+			return dto.RolloverScenarioResponse{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "stored simulation result is invalid", decodeErr)
+		}
+		gate := algorithm.EvaluateReleaseGate(affected, true)
+		switch gate.Status {
+		case algorithm.GateBlocked:
+			return dto.RolloverScenarioResponse{}, util.NewError(http.StatusConflict, util.CodeRiskGate, util.CompactText("release gate blocked by critical service breaks: "+gate.BlockedDetail(), 900))
+		case algorithm.GateAcceptanceRequired:
+			acceptanceNote = strings.TrimSpace(request.RiskAcceptance)
+			if acceptanceNote == "" {
+				return dto.RolloverScenarioResponse{}, util.NewError(http.StatusBadRequest, util.CodeValidation, "risk_acceptance is required because non-critical broken paths remain")
+			}
+			acceptanceAt = s.now()
+			updates["risk_acceptance_note"] = acceptanceNote
+			updates["risk_accepted_by"] = actor.UserID
+			updates["risk_accepted_by_name"] = actor.Username
+			updates["risk_accepted_at"] = acceptanceAt
+		}
+	}
 	before := scenario
+	auditSummary := strings.TrimSpace(request.Comment)
+	if acceptanceNote != "" {
+		auditSummary = "risk acceptance recorded: " + acceptanceNote
+		if comment := strings.TrimSpace(request.Comment); comment != "" {
+			auditSummary += "; comment: " + comment
+		}
+	}
 	err = s.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
 		changed, transitionErr := s.scenarios.Transition(txCtx, id, scenario.ScenarioState, request.ToState, updates)
 		if transitionErr != nil {
@@ -217,7 +251,13 @@ func (s *RolloverScenarioService) Transition(ctx context.Context, id uint, reque
 		if to == constants.ScenarioRollback {
 			scenario.RollbackRecord = strings.TrimSpace(request.Comment)
 		}
-		return recordAudit(txCtx, s.audits, actor, requestID, "rollover_scenario", id, "transition", before, scenario, scenario.InputHash, scenario.AlgorithmVersion, &scenario.SimulationTime, 0, request.Comment)
+		if acceptanceNote != "" {
+			scenario.RiskAcceptanceNote = acceptanceNote
+			scenario.RiskAcceptedBy = &actor.UserID
+			scenario.RiskAcceptedByName = actor.Username
+			scenario.RiskAcceptedAt = &acceptanceAt
+		}
+		return recordAudit(txCtx, s.audits, actor, requestID, "rollover_scenario", id, "transition", before, scenario, scenario.InputHash, scenario.AlgorithmVersion, &scenario.SimulationTime, 0, auditSummary)
 	})
 	if err != nil {
 		return dto.RolloverScenarioResponse{}, err

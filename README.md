@@ -69,6 +69,8 @@ Authentication is available through `POST /api/v1/auth/login`. All write endpoin
 
 Valid scenario transitions are `draft -> simulated -> ready -> executing -> verified`, `executing -> rollback`, and `simulated/ready -> draft`. Invalid transitions return `409`; a creator attempting to verify their own scenario receives `409 REVIEWER_SEPARATION_REQUIRED`. Authorization failures return `403`, and unauthenticated requests return `401`.
 
+Marking a simulated scenario `ready` is guarded by a backend release gate computed from the frozen simulation evidence (`backend/internal/algorithm/release_gate.go`, exposed as `release_gate` on the scenario response). Any critical-service break at any evaluated timepoint blocks the transition with `409 RISK_GATE_BLOCKED` and names the affected services and moments; non-critical breaks require a `risk_acceptance` note on the transition request, which is stored on the scenario and retained in the audit trail; a clean result passes directly. Re-running a simulation clears any previously recorded acceptance. The `/rollovers` page renders this verdict from the API rather than inferring it.
+
 ## Configuration and ports
 
 Copy `.env.example` to `.env` for local configuration. `.env` is intentionally ignored by Git.

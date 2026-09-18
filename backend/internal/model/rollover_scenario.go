@@ -29,6 +29,10 @@ type RolloverScenario struct {
 	ReplayVerified       bool        `gorm:"not null;default:false" json:"replay_verified"`
 	DurationMS           int64       `gorm:"not null;default:0" json:"duration_ms"`
 	RollbackRecord       string      `gorm:"type:text" json:"rollback_record"`
+	RiskAcceptanceNote   string      `gorm:"type:text" json:"risk_acceptance_note"`
+	RiskAcceptedBy       *uint       `json:"risk_accepted_by,omitempty"`
+	RiskAcceptedByName   string      `gorm:"size:80" json:"risk_accepted_by_name"`
+	RiskAcceptedAt       *time.Time  `json:"risk_accepted_at,omitempty"`
 	CreatedAt            time.Time   `gorm:"not null" json:"created_at"`
 	UpdatedAt            time.Time   `gorm:"not null" json:"updated_at"`
 }

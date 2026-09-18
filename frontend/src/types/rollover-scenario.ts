@@ -35,6 +35,22 @@ export interface TimepointEvidence {
   services: ServiceEvidence[]
 }
 
+export type ReleaseGateStatus = 'not_simulated' | 'clear' | 'acceptance_required' | 'blocked'
+
+export interface GateBreak {
+  service_id: number
+  service_code: string
+  at: string
+  reason: string
+}
+
+export interface ReleaseGate {
+  status: ReleaseGateStatus
+  critical_breaks: GateBreak[]
+  non_critical_breaks: GateBreak[]
+  summary: string
+}
+
 export interface RolloverScenario {
   id: number
   name: string
@@ -53,6 +69,11 @@ export interface RolloverScenario {
   path_evidence_json: TimepointEvidence[]
   scenario_state: ScenarioState
   explanation: string
+  release_gate: ReleaseGate
+  risk_acceptance_note: string
+  risk_accepted_by?: number
+  risk_accepted_by_name: string
+  risk_accepted_at?: string
   created_by: number
   created_by_name: string
   verified_by?: number
