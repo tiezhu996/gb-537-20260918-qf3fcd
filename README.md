@@ -67,7 +67,19 @@ Authentication is available through `POST /api/v1/auth/login`. All write endpoin
 - backend DTOs, services, routers, and state-machine tests
 - `frontend/src/types/enums/scenario-state.ts`, stores, state badges, and rollover page
 
+The release-gate decision (`pass | risk_acceptance_required | blocked_critical`) is computed in `backend/internal/algorithm/release_gate.go` (with tests), stored as `release_gate_json` during simulation, exposed through the scenario DTO, and mirrored by `frontend/src/types/enums/release-gate.ts` for the `ReleaseGateCard` on the rollover page.
+
 Valid scenario transitions are `draft -> simulated -> ready -> executing -> verified`, `executing -> rollback`, and `simulated/ready -> draft`. Invalid transitions return `409`; a creator attempting to verify their own scenario receives `409 REVIEWER_SEPARATION_REQUIRED`. Authorization failures return `403`, and unauthenticated requests return `401`.
+
+### Release risk gate for "mark ready"
+
+After a frozen snapshot has been simulated, the backend evaluates a release risk gate from the stored broken-path evidence and returns it on every scenario as `release_gate`. The rollover page renders that decision verbatim and never derives it client-side:
+
+- **No broken paths** (`decision: pass`): `simulated -> ready` is allowed directly.
+- **Only non-critical breaks** (`decision: risk_acceptance_required`): the transition requires a non-empty `risk_acceptance` note. The request without one returns `422 RISK_ACCEPTANCE_REQUIRED`; the accepted note is persisted on the scenario and retained in the transition audit record.
+- **Any critical service break at any timepoint** (`decision: blocked_critical`): the transition is refused with `409 RISK_GATE_BLOCKED`, and the response `release_gate.blocked_services` names each blocked service, the exact timepoints, and the reasons. A note cannot override this block; the trust path must be fixed or the window adjusted and the scenario re-simulated.
+
+The gate only enforces the `simulated -> ready` transition. Permissions, the state order, reviewer separation, and every other migration are unchanged.
 
 ## Configuration and ports
 

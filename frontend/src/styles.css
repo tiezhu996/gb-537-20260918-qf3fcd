@@ -233,6 +233,30 @@ button, input, textarea, select { letter-spacing: 0; }
 .broken-paths p { margin-top: 4px; color: #725a57; font-size: .67rem; line-height: 1.45; }
 .broken-paths .no-broken-paths { display: flex; align-items: center; gap: 7px; border-color: #b8cec2; background: #e8f0eb; color: var(--green); font-size: .75rem; }
 
+.release-gate { margin-top: 13px; padding: 13px; border: 1px solid var(--mineral-3); background: var(--mineral-0); }
+.release-gate.is-pass { border-color: #a8c5b5; background: #eef5f0; }
+.release-gate.is-risk { border-color: #d8b978; background: #f8f1e1; }
+.release-gate.is-block { border-color: #cf9c98; background: #f8eceb; }
+.release-gate-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.release-gate-title { display: flex; align-items: center; gap: 9px; }
+.release-gate-title .MuiSvgIcon-root { font-size: 1.5rem; }
+.release-gate.is-pass .release-gate-title .MuiSvgIcon-root { color: var(--green); }
+.release-gate.is-risk .release-gate-title .MuiSvgIcon-root { color: var(--amber); }
+.release-gate.is-block .release-gate-title .MuiSvgIcon-root { color: var(--red); }
+.release-gate-title strong { font-size: .84rem; }
+.release-gate-stats { display: flex; gap: 6px; flex-wrap: wrap; }
+.release-gate .MuiAlert-root { margin-top: 10px; font-size: .72rem; }
+.release-gate-blockers { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.release-gate-blocker { padding: 10px; border: 1px solid #dbc2bf; background: #f5e9e7; }
+.release-gate-blocker strong, .release-gate-blocker span { display: block; }
+.release-gate-blocker strong { color: #853935; font-size: .76rem; }
+.release-gate-blocker span { margin-top: 4px; color: #7e6865; font-size: .63rem; }
+.release-gate-blocker p { margin-top: 4px; color: #725a57; font-size: .67rem; line-height: 1.45; }
+.release-gate-hint { margin-top: 9px; color: #735623; font-size: .68rem; line-height: 1.5; }
+.release-gate-acceptance { margin-top: 10px; padding: 10px; border: 1px solid #b8cec2; background: #e8f0eb; }
+.release-gate-acceptance p:last-child { margin-top: 4px; color: #416050; font-size: .7rem; line-height: 1.5; overflow-wrap: anywhere; }
+.risk-acceptance-form { display: flex; flex-direction: column; gap: 10px; margin-top: 11px; padding: 12px; border: 1px dashed #d8b978; background: #fdf8ee; }
+
 .audit-register { border: 1px solid var(--mineral-3); background: var(--mineral-0); }
 .audit-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 15px; min-height: 67px; padding: 12px 15px; border-bottom: 1px solid var(--mineral-3); }
 .audit-toolbar > div { display: flex; align-items: center; gap: 8px; }

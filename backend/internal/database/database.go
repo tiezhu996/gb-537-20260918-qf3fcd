@@ -167,8 +167,9 @@ func seedDomain(tx *gorm.DB, users map[string]model.User) error {
 	affectedJSON, _ := json.Marshal(result.AffectedServices)
 	pathsJSON, _ := json.Marshal(result.BrokenPaths)
 	evidenceJSON, _ := json.Marshal(result.Evidence)
+	gateJSON, _ := json.Marshal(algorithm.EvaluateReleaseGate(result))
 	operator := users["operator"]
-	scenario := model.RolloverScenario{Name: snapshot.Config.Name, OldAnchorID: anchors[0].ID, NewAnchorID: anchors[1].ID, OverlapStart: snapshot.Config.OverlapStart, OverlapEnd: snapshot.Config.OverlapEnd, CandidateChainIDs: string(candidateJSON), AlgorithmVersion: algorithm.Version, InputHash: hash, InputSnapshot: snapshotJSON, SimulationTime: snapshot.Config.SimulationTime, AffectedServicesJSON: string(affectedJSON), BrokenPathsJSON: string(pathsJSON), PathEvidenceJSON: string(evidenceJSON), ScenarioState: string(constants.ScenarioSimulated), Explanation: result.Explanation, CreatedBy: operator.ID, CreatedByName: operator.Username, IdempotencyKey: "seed-rollover-simulation", DurationMS: 1, CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now.Add(-2 * time.Hour)}
+	scenario := model.RolloverScenario{Name: snapshot.Config.Name, OldAnchorID: anchors[0].ID, NewAnchorID: anchors[1].ID, OverlapStart: snapshot.Config.OverlapStart, OverlapEnd: snapshot.Config.OverlapEnd, CandidateChainIDs: string(candidateJSON), AlgorithmVersion: algorithm.Version, InputHash: hash, InputSnapshot: snapshotJSON, SimulationTime: snapshot.Config.SimulationTime, AffectedServicesJSON: string(affectedJSON), BrokenPathsJSON: string(pathsJSON), PathEvidenceJSON: string(evidenceJSON), ReleaseGateJSON: string(gateJSON), ScenarioState: string(constants.ScenarioSimulated), Explanation: result.Explanation, CreatedBy: operator.ID, CreatedByName: operator.Username, IdempotencyKey: "seed-rollover-simulation", DurationMS: 1, CreatedAt: now.Add(-2 * time.Hour), UpdatedAt: now.Add(-2 * time.Hour)}
 	if err := tx.Create(&scenario).Error; err != nil {
 		return fmt.Errorf("create seed rollover scenario: %w", err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"gorm.io/gorm"
 	"net/http"
 	"pki-certificate-rollover-impact/backend/internal/algorithm"
@@ -35,6 +36,37 @@ func requireScenarioOwnership(actor util.Actor, scenario model.RolloverScenario)
 		return nil
 	}
 	return util.NewError(http.StatusForbidden, util.CodeForbidden, "only the scenario creator or a PKI administrator may manage this scenario")
+}
+
+// loadReleaseGate reads the persisted gate decision written when the frozen
+// snapshot was simulated. A missing or empty stored decision is re-evaluated
+// from the frozen affected-service evidence so ready is never silently allowed.
+func loadReleaseGate(scenario model.RolloverScenario) (algorithm.ReleaseGate, error) {
+	gate := algorithm.ReleaseGate{BlockedServices: []algorithm.GateBlockedService{}}
+	if strings.TrimSpace(scenario.ReleaseGateJSON) != "" && scenario.ReleaseGateJSON != "{}" {
+		if err := json.Unmarshal([]byte(scenario.ReleaseGateJSON), &gate); err != nil {
+			return algorithm.ReleaseGate{}, fmt.Errorf("decode release gate decision: %w", err)
+		}
+		if gate.Decision != "" {
+			if gate.BlockedServices == nil {
+				gate.BlockedServices = []algorithm.GateBlockedService{}
+			}
+			return gate, nil
+		}
+	}
+	affected := []algorithm.AffectedService{}
+	if err := json.Unmarshal([]byte(scenario.AffectedServicesJSON), &affected); err != nil {
+		return algorithm.ReleaseGate{}, fmt.Errorf("decode frozen affected services: %w", err)
+	}
+	return algorithm.EvaluateReleaseGate(algorithm.Result{AffectedServices: affected}), nil
+}
+
+func buildCriticalBlockMessage(gate algorithm.ReleaseGate) string {
+	parts := []string{"critical service trust path breaks block the ready transition"}
+	for _, blocked := range gate.BlockedServices {
+		parts = append(parts, blocked.ServiceCode+" at "+strings.Join(blocked.Times, ", "))
+	}
+	return strings.Join(parts, "; ")
 }
 func (s *RolloverScenarioService) Create(ctx context.Context, request dto.CreateRolloverScenarioRequest, actor util.Actor, requestID string) (dto.RolloverScenarioResponse, error) {
 	if err := validateRequest(request); err != nil {
@@ -72,7 +104,7 @@ func (s *RolloverScenarioService) Create(ctx context.Context, request dto.Create
 	snapshotJSON, _ := snapshot.Canonical()
 	candidateJSON, _ := encode(candidateIDs)
 	now := s.now()
-	scenario := model.RolloverScenario{Name: strings.TrimSpace(request.Name), OldAnchorID: request.OldAnchorID, NewAnchorID: request.NewAnchorID, OverlapStart: request.OverlapStart.UTC(), OverlapEnd: request.OverlapEnd.UTC(), CandidateChainIDs: candidateJSON, AlgorithmVersion: algorithm.Version, InputHash: inputHash, InputSnapshot: snapshotJSON, SimulationTime: request.SimulationTime.UTC(), AffectedServicesJSON: "[]", BrokenPathsJSON: "[]", PathEvidenceJSON: "[]", ScenarioState: string(constants.ScenarioDraft), Explanation: "Frozen input is ready for offline simulation.", CreatedBy: actor.UserID, CreatedByName: actor.Username, CreatedAt: now, UpdatedAt: now}
+	scenario := model.RolloverScenario{Name: strings.TrimSpace(request.Name), OldAnchorID: request.OldAnchorID, NewAnchorID: request.NewAnchorID, OverlapStart: request.OverlapStart.UTC(), OverlapEnd: request.OverlapEnd.UTC(), CandidateChainIDs: candidateJSON, AlgorithmVersion: algorithm.Version, InputHash: inputHash, InputSnapshot: snapshotJSON, SimulationTime: request.SimulationTime.UTC(), AffectedServicesJSON: "[]", BrokenPathsJSON: "[]", PathEvidenceJSON: "[]", ReleaseGateJSON: "{}", RiskAcceptance: "", ScenarioState: string(constants.ScenarioDraft), Explanation: "Frozen input is ready for offline simulation.", CreatedBy: actor.UserID, CreatedByName: actor.Username, CreatedAt: now, UpdatedAt: now}
 	err = s.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
 		if createErr := s.scenarios.Create(txCtx, &scenario); createErr != nil {
 			return createErr
@@ -126,8 +158,10 @@ func (s *RolloverScenarioService) Simulate(ctx context.Context, id uint, idempot
 	affectedJSON, _ := encode(result.AffectedServices)
 	pathsJSON, _ := encode(result.BrokenPaths)
 	evidenceJSON, _ := encode(result.Evidence)
+	gate := algorithm.EvaluateReleaseGate(result)
+	gateJSON, _ := encode(gate)
 	before := scenario
-	updates := map[string]any{"affected_services_json": affectedJSON, "broken_paths_json": pathsJSON, "path_evidence_json": evidenceJSON, "explanation": result.Explanation, "duration_ms": duration, "idempotency_key": idempotencyKey}
+	updates := map[string]any{"affected_services_json": affectedJSON, "broken_paths_json": pathsJSON, "path_evidence_json": evidenceJSON, "release_gate_json": gateJSON, "explanation": result.Explanation, "duration_ms": duration, "idempotency_key": idempotencyKey}
 	err = s.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
 		changed, completeErr := s.scenarios.CompleteSimulation(txCtx, id, updates)
 		if completeErr != nil {
@@ -140,10 +174,11 @@ func (s *RolloverScenarioService) Simulate(ctx context.Context, id uint, idempot
 		scenario.AffectedServicesJSON = affectedJSON
 		scenario.BrokenPathsJSON = pathsJSON
 		scenario.PathEvidenceJSON = evidenceJSON
+		scenario.ReleaseGateJSON = gateJSON
 		scenario.Explanation = result.Explanation
 		scenario.DurationMS = duration
 		scenario.IdempotencyKey = idempotencyKey
-		return recordAudit(txCtx, s.audits, actor, requestID, "rollover_scenario", id, "simulate", before, scenario, scenario.InputHash, scenario.AlgorithmVersion, &scenario.SimulationTime, duration, result.Explanation)
+		return recordAudit(txCtx, s.audits, actor, requestID, "rollover_scenario", id, "simulate", before, scenario, scenario.InputHash, scenario.AlgorithmVersion, &scenario.SimulationTime, duration, gate.Summary)
 	})
 	if err != nil {
 		return dto.RolloverScenarioResponse{}, false, err
@@ -192,7 +227,25 @@ func (s *RolloverScenarioService) Transition(ctx context.Context, id uint, reque
 	if to == constants.ScenarioVerified && !scenario.ReviewerSeparated(actor.UserID) {
 		return dto.RolloverScenarioResponse{}, util.NewError(http.StatusConflict, util.CodeReviewerConflict, "scenario creator cannot verify their own simulation")
 	}
+	riskAcceptance := strings.TrimSpace(request.RiskAcceptance)
+	if to == constants.ScenarioReady {
+		gate, gateErr := loadReleaseGate(scenario)
+		if gateErr != nil {
+			return dto.RolloverScenarioResponse{}, util.WrapError(http.StatusUnprocessableEntity, util.CodeValidation, "frozen simulation evidence is invalid", gateErr)
+		}
+		switch gate.Decision {
+		case algorithm.GateBlockedCritical:
+			return dto.RolloverScenarioResponse{}, util.NewError(http.StatusConflict, util.CodeRiskGateBlocked, buildCriticalBlockMessage(gate))
+		case algorithm.GateRiskAcceptanceRequired:
+			if riskAcceptance == "" {
+				return dto.RolloverScenarioResponse{}, util.NewError(http.StatusUnprocessableEntity, util.CodeRiskAcceptance, "non-critical broken paths require a risk acceptance note before the scenario can be marked ready")
+			}
+		}
+	}
 	updates := map[string]any{}
+	if to == constants.ScenarioReady && riskAcceptance != "" {
+		updates["risk_acceptance"] = riskAcceptance
+	}
 	if to == constants.ScenarioVerified {
 		updates["verified_by"] = actor.UserID
 		updates["verified_by_name"] = actor.Username
@@ -210,6 +263,9 @@ func (s *RolloverScenarioService) Transition(ctx context.Context, id uint, reque
 			return util.NewError(http.StatusConflict, util.CodeConflict, "scenario state changed concurrently")
 		}
 		scenario.ScenarioState = request.ToState
+		if to == constants.ScenarioReady && riskAcceptance != "" {
+			scenario.RiskAcceptance = riskAcceptance
+		}
 		if to == constants.ScenarioVerified {
 			scenario.VerifiedBy = &actor.UserID
 			scenario.VerifiedByName = actor.Username
@@ -217,7 +273,11 @@ func (s *RolloverScenarioService) Transition(ctx context.Context, id uint, reque
 		if to == constants.ScenarioRollback {
 			scenario.RollbackRecord = strings.TrimSpace(request.Comment)
 		}
-		return recordAudit(txCtx, s.audits, actor, requestID, "rollover_scenario", id, "transition", before, scenario, scenario.InputHash, scenario.AlgorithmVersion, &scenario.SimulationTime, 0, request.Comment)
+		auditSummary := request.Comment
+		if to == constants.ScenarioReady && riskAcceptance != "" {
+			auditSummary = "risk acceptance: " + riskAcceptance
+		}
+		return recordAudit(txCtx, s.audits, actor, requestID, "rollover_scenario", id, "transition", before, scenario, scenario.InputHash, scenario.AlgorithmVersion, &scenario.SimulationTime, 0, auditSummary)
 	})
 	if err != nil {
 		return dto.RolloverScenarioResponse{}, err

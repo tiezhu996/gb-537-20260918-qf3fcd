@@ -19,6 +19,8 @@ type RolloverScenario struct {
 	AffectedServicesJSON string      `gorm:"type:text;not null" json:"affected_services_json"`
 	BrokenPathsJSON      string      `gorm:"type:text;not null" json:"broken_paths_json"`
 	PathEvidenceJSON     string      `gorm:"type:text;not null" json:"path_evidence_json"`
+	ReleaseGateJSON      string      `gorm:"type:text;not null" json:"release_gate_json"`
+	RiskAcceptance       string      `gorm:"type:text;not null" json:"risk_acceptance"`
 	ScenarioState        string      `gorm:"size:24;not null;index" json:"scenario_state"`
 	Explanation          string      `gorm:"type:text;not null" json:"explanation"`
 	CreatedBy            uint        `gorm:"not null;index" json:"created_by"`

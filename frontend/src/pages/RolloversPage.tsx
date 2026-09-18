@@ -7,6 +7,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/common/DataS
 import { Fingerprint } from '../components/common/Fingerprint'
 import { FormDrawer } from '../components/common/FormDrawer'
 import { PageHeader } from '../components/common/PageHeader'
+import { ReleaseGateCard } from '../components/common/ReleaseGateCard'
 import { ScenarioStateBadge } from '../components/common/ScenarioStateBadge'
 import { StatStrip } from '../components/common/StatStrip'
 import { ValidationEvidenceDrawer } from '../components/common/ValidationEvidenceDrawer'
@@ -42,6 +43,8 @@ export function RolloversPage() {
   const simulation = useRolloverSimulation()
   const [createOpen, setCreateOpen] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
+  const [acceptanceOpen, setAcceptanceOpen] = useState(false)
+  const [acceptanceNote, setAcceptanceNote] = useState('')
   const [form, setForm] = useState<CreateRolloverScenarioInput>(defaultScenario)
   const [feedback, setFeedback] = useState('')
   const [success, setSuccess] = useState('')
@@ -70,9 +73,9 @@ export function RolloversPage() {
     try { const updated = await simulation.run(scenario.id); setSuccess(`推演完成：记录 ${updated.path_evidence_json.length} 个时间点，发现 ${updated.broken_paths_json.length} 条断裂路径。`) }
     catch (cause) { setFeedback(errorMessage(cause)) }
   }
-  const transitionActive = async (to: ScenarioState) => {
+  const transitionActive = async (to: ScenarioState, riskAcceptance?: string) => {
     if (!active) return; setBusy(true); setFeedback(''); setSuccess('')
-    try { const updated = await transition(active.id, to); setSuccess(`场景状态已更新为 ${updated.scenario_state}。`) }
+    try { const updated = await transition(active.id, to, '', riskAcceptance); setSuccess(`场景状态已更新为 ${updated.scenario_state}。`); setAcceptanceOpen(false); setAcceptanceNote('') }
     catch (cause) { setFeedback(errorMessage(cause)) } finally { setBusy(false) }
   }
   const replayActive = async () => {
@@ -84,6 +87,15 @@ export function RolloversPage() {
   const next = active ? transitionCopy[active.scenario_state] : undefined
   const canAdvance = next && ((next.to === 'verified' && can('scenario.verify')) || (next.to !== 'verified' && can('scenario.write')))
   const reviewerConflict = active?.scenario_state === 'executing' && active.created_by === user?.user_id
+  const gate = active?.release_gate
+  const readyGateBlocks = active?.scenario_state === 'simulated' && gate?.decision === 'blocked_critical'
+  const readyGateNeedsAcceptance = active?.scenario_state === 'simulated' && gate?.decision === 'risk_acceptance_required' && !active.risk_acceptance
+  const requestReady = () => {
+    if (!active) return
+    if (readyGateNeedsAcceptance) { setAcceptanceNote(''); setFeedback(''); setAcceptanceOpen(true); return
+    }
+    void transitionActive('ready')
+  }
 
   return <Box className="page-shell rollover-page">
     <PageHeader eyebrow="ROLLOVER REHEARSAL / FROZEN SNAPSHOTS" title="轮换推演" summary="在旧根、新根和交叠窗口的关键时间点重放服务信任路径。executing 仅记录演练步骤，不执行生产变更。" actions={<><Tooltip title="刷新"><IconButton onClick={() => fetchScenarios()} aria-label="刷新轮换推演"><RefreshRounded /></IconButton></Tooltip>{can('scenario.write') && <Button variant="contained" startIcon={<AddRounded />} onClick={openCreate}>新建冻结场景</Button>}</>} />
@@ -101,9 +113,11 @@ export function RolloversPage() {
           <Box className="anchor-transition"><Box><span>旧信任锚</span><strong>{active.old_anchor?.anchor_code ?? `#${active.old_anchor_id}`}</strong><small>{active.old_anchor?.fingerprint_sha256 && <Fingerprint value={active.old_anchor.fingerprint_sha256} compact />}</small></Box><Box className="transition-axis"><ArrowForwardRounded /><span>{formatDateTime(active.overlap_start)}<br />至 {formatDateTime(active.overlap_end)}</span></Box><Box><span>新信任锚</span><strong>{active.new_anchor?.anchor_code ?? `#${active.new_anchor_id}`}</strong><small>{active.new_anchor?.fingerprint_sha256 && <Fingerprint value={active.new_anchor.fingerprint_sha256} compact />}</small></Box></Box>
           <Box className="scenario-evidence-grid"><Box><Typography className="eyebrow">SIMULATION TIME</Typography><strong>{formatDateTime(active.simulation_time)}</strong><span>耗时 {active.duration_ms} ms</span></Box><Box><Typography className="eyebrow">INPUT HASH</Typography><Fingerprint value={active.input_hash} compact /></Box><Box className={active.broken_paths_json.length ? 'is-risk' : 'is-pass'}><Typography className="eyebrow">BROKEN PATHS</Typography><strong>{active.broken_paths_json.length}</strong><span>{active.affected_services_json.length} 个受影响服务</span></Box></Box>
           <Box className="simulation-explanation"><ScienceRounded /><Typography>{active.explanation}</Typography></Box>
+          {active.scenario_state !== 'draft' && gate && <ReleaseGateCard gate={gate} simulated={active.scenario_state === 'simulated'} riskAcceptance={active.risk_acceptance} />}
           <Box className="scenario-toolbar">
             {active.scenario_state === 'draft' && can('scenario.run') && <Button variant="contained" startIcon={<PlayArrowRounded />} disabled={simulation.runningId === active.id} onClick={() => runSimulation(active)}>{simulation.runningId === active.id ? '正在推演…' : '运行离线推演'}</Button>}
-            {canAdvance && !reviewerConflict && <Button variant="contained" startIcon={next?.to === 'verified' ? <FactCheckRounded /> : <ArrowForwardRounded />} disabled={busy} onClick={() => next && transitionActive(next.to)}>{next?.label}</Button>}
+            {canAdvance && !reviewerConflict && next?.to === 'ready' && <Button variant="contained" startIcon={<ArrowForwardRounded />} disabled={busy || readyGateBlocks} title={readyGateBlocks ? '关键服务存在断裂路径，风险门槛禁止放行' : ''} onClick={requestReady}>{readyGateBlocks ? '风险门槛已拦截' : next.label}</Button>}
+            {canAdvance && !reviewerConflict && next?.to !== 'ready' && <Button variant="contained" startIcon={next?.to === 'verified' ? <FactCheckRounded /> : <ArrowForwardRounded />} disabled={busy} onClick={() => next && transitionActive(next.to)}>{next?.label}</Button>}
             {active.scenario_state !== 'draft' && can('scenario.run') && <Button variant="outlined" startIcon={<ReplayRounded />} disabled={busy} onClick={replayActive}>重放一致性</Button>}
             {!!active.path_evidence_json.length && <Button variant="outlined" startIcon={<RouteRounded />} onClick={() => setEvidenceOpen(true)}>逐路径证据</Button>}
             {active.scenario_state === 'executing' && can('scenario.write') && <Button color="error" variant="text" startIcon={<AutorenewRounded />} onClick={() => transitionActive('rollback')}>记录回滚</Button>}
@@ -120,6 +134,14 @@ export function RolloversPage() {
         <FormControl required><InputLabel>候选证书链</InputLabel><Select multiple label="候选证书链" value={form.candidate_chain_ids} onChange={(event) => setForm({ ...form, candidate_chain_ids: event.target.value as number[] })} renderValue={(values) => values.map((id) => chains.find((chain) => chain.id === id)?.chain_code ?? id).join(', ')}>{chains.map((chain) => <MenuItem key={chain.id} value={chain.id}><Checkbox checked={form.candidate_chain_ids.includes(chain.id)} /><ListItemText primary={chain.chain_code} secondary={chain.leaf_subject} /></MenuItem>)}</Select></FormControl>
         <Box className="form-grid"><TextField label="交叠开始" type="datetime-local" value={form.overlap_start} onChange={(event) => setForm({ ...form, overlap_start: event.target.value })} slotProps={{ inputLabel: { shrink: true } }} required /><TextField label="交叠结束" type="datetime-local" value={form.overlap_end} onChange={(event) => setForm({ ...form, overlap_end: event.target.value })} slotProps={{ inputLabel: { shrink: true } }} required /></Box><TextField label="模拟时间" type="datetime-local" value={form.simulation_time} onChange={(event) => setForm({ ...form, simulation_time: event.target.value })} slotProps={{ inputLabel: { shrink: true } }} required />
         <Button type="submit" variant="contained" disabled={busy}>{busy ? '正在冻结输入…' : '冻结输入并创建草稿'}</Button>
+      </Box>
+    </FormDrawer>
+    <FormDrawer open={acceptanceOpen} onClose={() => setAcceptanceOpen(false)} eyebrow="RISK ACCEPTANCE" title="非关键断裂风险接受">
+      {gate && <ReleaseGateCard gate={gate} simulated riskAcceptance={active?.risk_acceptance} />}
+      <Box className="risk-acceptance-form">
+        <Alert severity="warning">仅非关键服务断裂时允许带说明放行。提交后说明会写入审计记录；关键服务断裂无法通过此流程放行。</Alert>
+        <TextField label="风险接受说明" value={acceptanceNote} onChange={(event) => setAcceptanceNote(event.target.value)} required multiline minRows={4} slotProps={{ htmlInput: { maxLength: 1000 } }} helperText={`${acceptanceNote.length}/1000，需说明影响范围、值守安排与回退预案`} />
+        <Button variant="contained" disabled={busy || acceptanceNote.trim().length < 10} onClick={() => transitionActive('ready', acceptanceNote.trim())}>{busy ? '正在提交…' : '提交说明并标记待执行'}</Button>
       </Box>
     </FormDrawer>
   </Box>

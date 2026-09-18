@@ -14,7 +14,7 @@ interface RolloverScenarioState {
   fetchScenarios: (query?: string) => Promise<void>
   createScenario: (input: CreateRolloverScenarioInput) => Promise<RolloverScenario>
   simulate: (id: number, key: string) => Promise<RolloverScenario>
-  transition: (id: number, state: ScenarioState, comment?: string) => Promise<RolloverScenario>
+  transition: (id: number, state: ScenarioState, comment?: string, riskAcceptance?: string) => Promise<RolloverScenario>
   replay: (id: number) => Promise<RolloverScenario>
   select: (scenario: RolloverScenario | null) => void
 }
@@ -39,7 +39,7 @@ export const useRolloverScenarioStore = create<RolloverScenarioState>((set, get)
       return created
     },
     simulate: async (id, key) => { const updated = await rolloverScenarioApi.simulate(id, key); merge(updated); return updated },
-    transition: async (id, state, comment) => { const updated = await rolloverScenarioApi.transition(id, state, comment); merge(updated); return updated },
+    transition: async (id, state, comment, riskAcceptance) => { const updated = await rolloverScenarioApi.transition(id, state, comment, riskAcceptance); merge(updated); return updated },
     replay: async (id) => { const updated = await rolloverScenarioApi.replay(id); merge(updated); return updated },
     select: (scenario) => set({ active: scenario }),
   }

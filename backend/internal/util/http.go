@@ -22,6 +22,8 @@ const (
 	CodeStateTransition  = "INVALID_STATE_TRANSITION"
 	CodeIdempotency      = "IDEMPOTENCY_CONFLICT"
 	CodeReviewerConflict = "REVIEWER_SEPARATION_REQUIRED"
+	CodeRiskGateBlocked  = "RISK_GATE_BLOCKED"
+	CodeRiskAcceptance   = "RISK_ACCEPTANCE_REQUIRED"
 	CodeInternal         = "INTERNAL_ERROR"
 )
 

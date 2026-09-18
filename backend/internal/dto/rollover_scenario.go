@@ -2,6 +2,7 @@ package dto
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"pki-certificate-rollover-impact/backend/internal/algorithm"
@@ -18,8 +19,9 @@ type CreateRolloverScenarioRequest struct {
 	SimulationTime    time.Time `json:"simulation_time" validate:"required"`
 }
 type RolloverScenarioTransitionRequest struct {
-	ToState string `json:"to_state" validate:"required,oneof=draft ready executing verified rollback"`
-	Comment string `json:"comment" validate:"max=1000"`
+	ToState        string `json:"to_state" validate:"required,oneof=draft ready executing verified rollback"`
+	Comment        string `json:"comment" validate:"max=1000"`
+	RiskAcceptance string `json:"risk_acceptance" validate:"max=1000"`
 }
 type RolloverScenarioQuery struct {
 	State     string
@@ -44,8 +46,10 @@ type RolloverScenarioResponse struct {
 	AffectedServicesJSON []algorithm.AffectedService   `json:"affected_services_json"`
 	BrokenPathsJSON      []algorithm.BrokenPath        `json:"broken_paths_json"`
 	PathEvidenceJSON     []algorithm.TimepointEvidence `json:"path_evidence_json"`
+	ReleaseGate          algorithm.ReleaseGate         `json:"release_gate"`
 	ScenarioState        string                        `json:"scenario_state"`
 	Explanation          string                        `json:"explanation"`
+	RiskAcceptance       string                        `json:"risk_acceptance"`
 	CreatedBy            uint                          `json:"created_by"`
 	CreatedByName        string                        `json:"created_by_name"`
 	VerifiedBy           *uint                         `json:"verified_by,omitempty"`
@@ -72,7 +76,17 @@ func NewRolloverScenarioResponse(scenario model.RolloverScenario, now time.Time)
 	_ = json.Unmarshal([]byte(scenario.AffectedServicesJSON), &affected)
 	_ = json.Unmarshal([]byte(scenario.BrokenPathsJSON), &paths)
 	_ = json.Unmarshal([]byte(scenario.PathEvidenceJSON), &evidence)
-	response := RolloverScenarioResponse{ID: scenario.ID, Name: scenario.Name, OldAnchorID: scenario.OldAnchorID, NewAnchorID: scenario.NewAnchorID, OverlapStart: scenario.OverlapStart, OverlapEnd: scenario.OverlapEnd, CandidateChainIDs: candidateIDs, AlgorithmVersion: scenario.AlgorithmVersion, InputHash: scenario.InputHash, SimulationTime: scenario.SimulationTime, AffectedServicesJSON: affected, BrokenPathsJSON: paths, PathEvidenceJSON: evidence, ScenarioState: scenario.ScenarioState, Explanation: scenario.Explanation, CreatedBy: scenario.CreatedBy, CreatedByName: scenario.CreatedByName, VerifiedBy: scenario.VerifiedBy, VerifiedByName: scenario.VerifiedByName, ReplayVerified: scenario.ReplayVerified, DurationMS: scenario.DurationMS, RollbackRecord: scenario.RollbackRecord, CreatedAt: scenario.CreatedAt, UpdatedAt: scenario.UpdatedAt}
+	gate := algorithm.ReleaseGate{Decision: algorithm.GatePass, BlockedServices: []algorithm.GateBlockedService{}}
+	if strings.TrimSpace(scenario.ReleaseGateJSON) != "" && scenario.ReleaseGateJSON != "{}" {
+		_ = json.Unmarshal([]byte(scenario.ReleaseGateJSON), &gate)
+	}
+	if gate.Decision == "" {
+		gate = algorithm.EvaluateReleaseGate(algorithm.Result{AffectedServices: affected, BrokenPaths: paths})
+	}
+	if gate.BlockedServices == nil {
+		gate.BlockedServices = []algorithm.GateBlockedService{}
+	}
+	response := RolloverScenarioResponse{ID: scenario.ID, Name: scenario.Name, OldAnchorID: scenario.OldAnchorID, NewAnchorID: scenario.NewAnchorID, OverlapStart: scenario.OverlapStart, OverlapEnd: scenario.OverlapEnd, CandidateChainIDs: candidateIDs, AlgorithmVersion: scenario.AlgorithmVersion, InputHash: scenario.InputHash, SimulationTime: scenario.SimulationTime, AffectedServicesJSON: affected, BrokenPathsJSON: paths, PathEvidenceJSON: evidence, ReleaseGate: gate, ScenarioState: scenario.ScenarioState, Explanation: scenario.Explanation, RiskAcceptance: scenario.RiskAcceptance, CreatedBy: scenario.CreatedBy, CreatedByName: scenario.CreatedByName, VerifiedBy: scenario.VerifiedBy, VerifiedByName: scenario.VerifiedByName, ReplayVerified: scenario.ReplayVerified, DurationMS: scenario.DurationMS, RollbackRecord: scenario.RollbackRecord, CreatedAt: scenario.CreatedAt, UpdatedAt: scenario.UpdatedAt}
 	if scenario.OldAnchor.ID != 0 {
 		anchor := NewTrustAnchorResponse(scenario.OldAnchor, 0, now)
 		response.OldAnchor = &anchor
